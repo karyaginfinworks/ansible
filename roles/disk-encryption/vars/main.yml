@@ -1,0 +1,5 @@
+---
+# Variables for disk-encryption role
+required_packages:
+  - cryptsetup
+  - cryptsetup-bin

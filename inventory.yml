@@ -1,0 +1,11 @@
+all:
+  hosts:
+    target_server:
+      ansible_host: 3.121.198.191
+      ansible_user: ubuntu
+      ansible_ssh_private_key_file: /tmp/hf_key
+      disk_to_encrypt: /dev/vdb
+      encryption_passphrase: "test_password_123"
+      vm_if_name: "net0"
+  vars:
+    ansible_python_interpreter: /usr/bin/python3

@@ -1,0 +1,301 @@
+---
+# System Info Role - Main Tasks
+# Gather system information using native Ansible modules
+
+- name: "System Info | Install required packages"
+  package:
+    name: "{{ required_packages }}"
+    state: present
+  tags: [system-info, install]
+
+- name: "System Info | Gather comprehensive system facts"
+  setup:
+    gather_subset:
+      - all
+  tags: [system-info, facts]
+
+- name: "System Info | Check if Intel P-State directory exists"
+  stat:
+    path: "{{ sysfs_paths.intel_pstate }}"
+  register: intel_pstate_exists
+  tags: [system-info, intel]
+
+- name: "System Info | Check if AMD P-State directory exists"
+  stat:
+    path: "{{ sysfs_paths.amd_pstate }}"
+  register: amd_pstate_exists
+  tags: [system-info, amd]
+
+- name: "System Info | Check if SMT control exists"
+  stat:
+    path: "{{ sysfs_paths.smt_control }}"
+  register: smt_control_exists
+  tags: [system-info, smt]
+
+- name: "System Info | Get CPU information"
+  command: "{{ cpu_commands.lscpu }}"
+  register: cpu_info
+  changed_when: false
+  when: gather_cpu_info
+  tags: [system-info, cpu]
+
+- name: "System Info | Get CPU frequency information"
+  slurp:
+    src: "{{ system_files.cpuinfo }}"
+  register: cpuinfo_raw
+  when: 
+    - gather_cpu_info
+    - check_cpu_frequency
+  tags: [system-info, cpu]
+
+- name: "System Info | Parse CPU frequency from cpuinfo"
+  set_fact:
+    cpu_frequency_info:
+      stdout: "{{ (cpuinfo_raw.content | b64decode).split('\n') | select('match', '^cpu MHz.*') | list | join('\n') }}"
+  when: 
+    - cpuinfo_raw is defined
+    - cpuinfo_raw.content is defined
+  tags: [system-info, cpu]
+
+- name: "System Info | Get current CPU governor"
+  slurp:
+    src: "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+  register: cpu_governor_raw
+  when: 
+    - gather_cpu_info
+    - check_cpu_governor
+  failed_when: false
+  tags: [system-info, cpu]
+
+- name: "System Info | Set CPU governor fact"
+  set_fact:
+    cpu_governor_info:
+      stdout: "{{ cpu_governor_raw.content | b64decode | trim }}"
+  when: 
+    - cpu_governor_raw is defined
+    - cpu_governor_raw.content is defined
+  tags: [system-info, cpu]
+
+- name: "System Info | Check Intel Hyper-Threading"
+  shell: "{{ intel_commands.ht_check }}"
+  register: ht_check_result
+  changed_when: false
+  when: 
+    - check_hyperthreading
+    - ansible_processor is defined
+    - ansible_processor[0] is search("Intel")
+  tags: [system-info, intel, hyperthreading]
+
+- name: "System Info | Get Intel threading information"
+  shell: |
+    echo "Intel Hyper-Threading: {{ ht_check_result.stdout | default('Unknown') | upper }}"
+    echo "Logical CPUs: $({{ intel_commands.logical_cpus }})"
+    echo "Physical CPUs: $({{ intel_commands.physical_cpus }})"
+    echo "Threads per Core: $({{ intel_commands.threads_per_core }})"
+  register: ht_info
+  changed_when: false
+  when: 
+    - ht_check_result is defined
+    - ht_check_result.stdout is defined
+    - check_intel_features
+  tags: [system-info, intel, hyperthreading]
+
+- name: "System Info | Check AMD SMT status"
+  slurp:
+    src: "/sys/devices/system/cpu/smt/active"
+  register: amd_smt_raw
+  when: 
+    - check_amd_smt
+    - ansible_processor is defined
+    - ansible_processor[0] is search("AMD")
+    - smt_control_exists.stat.exists
+  failed_when: false
+  tags: [system-info, amd, smt]
+
+- name: "System Info | Get AMD SMT information"
+  shell: |
+    if [ -f /sys/devices/system/cpu/smt/active ]; then
+      smt_status=$(cat /sys/devices/system/cpu/smt/active)
+      if [ "$smt_status" = "1" ]; then
+        echo "AMD SMT: ENABLED"
+      else
+        echo "AMD SMT: DISABLED"
+      fi
+    else
+      echo "AMD SMT: NOT SUPPORTED"
+    fi
+    echo "Logical CPUs: $({{ amd_commands.logical_cpus }})"
+    echo "Physical CPUs: $({{ amd_commands.physical_cpus }})"
+  register: smt_info
+  changed_when: false
+  when: 
+    - check_amd_smt
+    - ansible_processor is defined
+    - ansible_processor[0] is search("AMD")
+  tags: [system-info, amd, smt]
+
+- name: "System Info | Get memory information"
+  command: "{{ memory_commands.free }}"
+  register: memory_detailed_info
+  changed_when: false
+  when: 
+    - gather_memory_info
+    - detailed_report
+  tags: [system-info, memory]
+
+- name: "System Info | Get disk information"
+  command: "{{ disk_commands.lsblk }}"
+  register: disk_detailed_info
+  changed_when: false
+  when: 
+    - gather_disk_info
+    - detailed_report
+  tags: [system-info, disk]
+
+- name: "System Info | Get kernel command line"
+  slurp:
+    src: "{{ system_files.cmdline }}"
+  register: kernel_cmdline_raw
+  when: gather_kernel_info
+  tags: [system-info, kernel]
+
+- name: "System Info | Set kernel cmdline fact"
+  set_fact:
+    kernel_cmdline:
+      stdout: "{{ kernel_cmdline_raw.content | b64decode | trim }}"
+  when: 
+    - kernel_cmdline_raw is defined
+    - kernel_cmdline_raw.content is defined
+  tags: [system-info, kernel]
+
+- name: "System Info | Get loaded kernel modules"
+  shell: "{{ kernel_commands.modules }}"
+  register: kernel_modules
+  changed_when: false
+  when: 
+    - gather_kernel_info
+    - detailed_report
+  tags: [system-info, kernel]
+
+- name: "System Info | Get virtualization information"
+  command: "{{ virtualization_commands.dmi_product }}"
+  register: virtualization_details
+  changed_when: false
+  failed_when: false
+  when: gather_virtualization_info
+  tags: [system-info, virtualization]
+
+- name: "System Info | Check security mitigations"
+  shell: "{{ security_commands.mitigations }}"
+  register: security_mitigations
+  changed_when: false
+  failed_when: false
+  when: check_security_features
+  tags: [system-info, security]
+
+- name: "System Info | Check CPU vulnerabilities"
+  slurp:
+    src: "{{ sysfs_paths.vulnerabilities }}/{{ item }}"
+  register: vulnerability_raw
+  loop:
+    - spectre_v1
+    - spectre_v2
+    - meltdown
+  when: check_security_features
+  failed_when: false
+  tags: [system-info, security]
+
+- name: "System Info | Process vulnerability information"
+  set_fact:
+    vulnerability_info: "{{ vulnerability_info | default({}) | combine({item.item: {'stdout': item.content | b64decode | trim}}) }}"
+  loop: "{{ vulnerability_raw.results }}"
+  when: 
+    - vulnerability_raw is defined
+    - vulnerability_raw.results is defined
+    - item.content is defined
+    - item.content != ""
+  tags: [system-info, security]
+  no_log: true
+
+- name: "System Info | Display CPU vulnerabilities status"
+  debug:
+    msg:
+      - "=== CPU SECURITY VULNERABILITIES ==="
+      - "Spectre v1: {{ vulnerability_info.spectre_v1.stdout | default('Unknown') }}"
+      - "Spectre v2: {{ vulnerability_info.spectre_v2.stdout | default('Unknown') }}"
+      - "Meltdown: {{ vulnerability_info.meltdown.stdout | default('Unknown') }}"
+  when: 
+    - vulnerability_info is defined
+    - check_security_features
+  tags: [system-info, security]
+
+- name: "System Info | Get hardware system information"
+  command: "{{ hardware_commands.dmidecode_system }}"
+  register: hardware_system_info
+  changed_when: false
+  failed_when: false
+  when: check_hardware_info
+  tags: [system-info, hardware]
+
+- name: "System Info | Get BIOS information"
+  command: "{{ hardware_commands.dmidecode_bios }}"
+  register: bios_info
+  changed_when: false
+  failed_when: false
+  when: 
+    - check_hardware_info
+    - check_bios_info
+  tags: [system-info, hardware, bios]
+
+- name: "System Info | Get PCI devices information"
+  command: "{{ hardware_commands.lspci }}"
+  register: pci_info
+  changed_when: false
+  failed_when: false
+  when: 
+    - check_hardware_info
+    - check_pci_devices
+  tags: [system-info, hardware, pci]
+
+- name: "System Info | Display system summary"
+  debug:
+    msg:
+      - "=== SYSTEM SUMMARY ==="
+      - "Hostname: {{ ansible_hostname }}"
+      - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+      - "Kernel: {{ ansible_kernel }}"
+      - "Architecture: {{ ansible_architecture }}"
+      - "CPU: {{ ansible_processor[2] if ansible_processor is defined and ansible_processor|length > 2 else 'Unknown' }}"
+      - "CPU Cores: {{ ansible_processor_cores }}"
+      - "CPU VCPUs: {{ ansible_processor_vcpus }}"
+      - "Memory: {{ ansible_memtotal_mb }} MB"
+      - "Virtualization: {{ ansible_virtualization_type | default('Physical') }}"
+  when: display_summary
+  tags: [system-info, summary]
+
+- name: "System Info | Display Intel Hyper-Threading status"
+  debug:
+    msg: "{{ ht_info.stdout_lines }}"
+  when: 
+    - ht_info is defined
+    - ht_info.stdout_lines is defined
+    - display_detailed_info
+  tags: [system-info, intel]
+
+- name: "System Info | Display AMD SMT status"
+  debug:
+    msg: "{{ smt_info.stdout_lines }}"
+  when: 
+    - smt_info is defined
+    - smt_info.stdout_lines is defined
+    - display_detailed_info
+  tags: [system-info, amd]
+
+
+- name: "System Info | Display comprehensive system report"
+  debug:
+    msg: "{{ lookup('template', 'system_report.j2').split('\n') }}"
+  when: 
+    - display_detailed_info
+    - not save_to_file
+  tags: [system-info, report]

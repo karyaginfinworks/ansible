@@ -1,0 +1,29 @@
+---
+# Variables for cpu-optimization role
+
+# Paths to system files
+cpu_governor_path: "/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"
+
+# Intel specific paths
+intel_pstate_path: "/sys/devices/system/cpu/intel_pstate"
+intel_turbo_path: "/sys/devices/system/cpu/intel_pstate/no_turbo"
+intel_min_perf_path: "/sys/devices/system/cpu/intel_pstate/min_perf_pct"
+intel_max_perf_path: "/sys/devices/system/cpu/intel_pstate/max_perf_pct"
+
+# AMD specific paths
+amd_pstate_path: "/sys/devices/system/cpu/amd_pstate"
+amd_boost_path: "/sys/devices/system/cpu/cpufreq/boost"
+
+# Packages for CPU management
+required_packages:
+  - cpufrequtils
+  - linux-tools-common
+  - linux-tools-generic
+
+# AMD specific packages
+amd_packages:
+  - amd64-microcode
+
+# Intel specific packages
+intel_packages:
+  - intel-microcode

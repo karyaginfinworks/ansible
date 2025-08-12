@@ -1,0 +1,40 @@
+---
+- name: Server Setup
+  hosts: target_server
+  become: true
+  gather_facts: true
+  
+  pre_tasks:
+    - name: Create ansible temp directory
+      file:
+        path: /root/.ansible/tmp
+        state: directory
+        mode: '0755'
+      tags: always
+
+    - name: Update package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      tags: always
+
+  roles:
+    - role: network-setup
+      tags: network
+      
+    - role: cpu-optimization
+      tags: cpu
+      
+    - role: disk-encryption
+      tags: disk
+      
+    - role: system-info
+      tags: info
+
+
+  handlers:
+    - name: restart networking
+      service:
+        name: systemd-networkd
+        state: restarted
+      when: ansible_distribution == "Ubuntu"

@@ -1,0 +1,65 @@
+---
+# Variables for system-info role
+
+# CPU vendor detection
+cpu_vendor: "{{ 'intel' if ansible_processor[0] is search('Intel') else 'amd' if ansible_processor[0] is search('AMD') else 'unknown' }}"
+
+# Commands for CPU information gathering
+cpu_commands:
+  lscpu: "lscpu"
+
+# Commands for Intel Hyper-Threading check
+intel_commands:
+  ht_check: "grep -q 'ht' /proc/cpuinfo && echo 'enabled' || echo 'disabled'"
+  logical_cpus: "nproc"
+  physical_cpus: "lscpu | grep 'Core(s) per socket' | awk '{print $4}'"
+  threads_per_core: "lscpu | grep 'Thread(s) per core' | awk '{print $4}'"
+
+# Commands for AMD SMT check
+amd_commands:
+  logical_cpus: "nproc"
+  physical_cpus: "lscpu | grep 'Core(s) per socket' | awk '{print $4}'"
+
+# Commands for memory information gathering
+memory_commands:
+  free: "free -h"
+
+# Commands for disk information gathering
+disk_commands:
+  lsblk: "lsblk -f"
+
+# Commands for kernel information gathering
+kernel_commands:
+  modules: "lsmod | head -20"
+
+# Commands for virtualization check
+virtualization_commands:
+  dmi_product: "dmidecode -s system-product-name"
+
+# Commands for security check
+security_commands:
+  mitigations: "cat /proc/cmdline | grep -o 'mitigations=[^ ]*'"
+
+# Commands for hardware check
+hardware_commands:
+  dmidecode_system: "dmidecode -t system"
+  dmidecode_bios: "dmidecode -t bios"
+  lspci: "lspci"
+
+# Paths to system files
+system_files:
+  cpuinfo: "/proc/cpuinfo"
+  cmdline: "/proc/cmdline"
+
+# Paths to sysfs files
+sysfs_paths:
+  intel_pstate: "/sys/devices/system/cpu/intel_pstate"
+  amd_pstate: "/sys/devices/system/cpu/amd_pstate"
+  smt_control: "/sys/devices/system/cpu/smt"
+  vulnerabilities: "/sys/devices/system/cpu/vulnerabilities"
+
+# Required packages for information gathering
+required_packages:
+  - dmidecode
+  - pciutils
+  - usbutils

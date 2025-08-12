@@ -1,0 +1,27 @@
+---
+- name: reload sysctl
+  command: sysctl -p
+  
+- name: restart cpufrequtils
+  service:
+    name: cpufrequtils
+    state: restarted
+  failed_when: false
+
+- name: apply intel cpu settings
+  command: /usr/local/bin/cpu-optimize-intel.sh
+  when: cpu_vendor == "intel"
+  failed_when: false
+
+- name: apply amd cpu settings
+  command: /usr/local/bin/cpu-optimize-amd.sh
+  when: cpu_vendor == "amd"
+  failed_when: false
+
+- name: apply cpu settings
+  command: /usr/local/bin/cpu-optimize.sh
+  failed_when: false
+
+- name: update grub
+  command: "{{ grub_update_command }}"
+  failed_when: false
