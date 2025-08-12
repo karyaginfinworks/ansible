@@ -1,0 +1,162 @@
+---
+# Network Setup Role - Simplified Version
+# Simple network interface renaming using netplan
+
+- name: "Network Setup | Install required packages"
+  package:
+    name: "{{ required_packages }}"
+    state: present
+  tags: [network-setup, install]
+
+- name: "Network Setup | Install Ubuntu specific packages"
+  package:
+    name: "{{ ubuntu_packages }}"
+    state: present
+  when: ansible_distribution == "Ubuntu"
+  tags: [network-setup, install]
+
+- name: "Network Setup | Get current active network interface"
+  shell: "ip route | grep default | awk '{print $5}' | head -1"
+  register: current_interface
+  changed_when: false
+  tags: [network-setup, discovery]
+
+- name: "Network Setup | Display current interface"
+  debug:
+    msg: "Current active interface: {{ current_interface.stdout }}"
+  tags: [network-setup, info]
+
+- name: "Network Setup | Check if interface rename is needed"
+  set_fact:
+    rename_needed: "{{ current_interface.stdout != vm_if_name }}"
+  when: vm_if_name is defined
+  tags: [network-setup, check]
+
+- name: "Network Setup | Display rename status"
+  debug:
+    msg: "Interface rename needed: {{ rename_needed | default(false) }} (current: {{ current_interface.stdout }}, target: {{ vm_if_name | default('not set') }})"
+  tags: [network-setup, info]
+
+- name: "Network Setup | Skip renaming - interface already has correct name"
+  debug:
+    msg: "Interface {{ current_interface.stdout }} already has the desired name {{ vm_if_name }}. Skipping rename."
+  when: not (rename_needed | default(false))
+  tags: [network-setup, skip]
+
+# Only proceed with renaming if needed
+- block:
+  - name: "Network Setup | Find netplan configuration files"
+    find:
+      paths: "/etc/netplan"
+      patterns: "*.yaml,*.yml"
+    register: netplan_files
+    tags: [network-setup, discovery]
+
+  - name: "Network Setup | Display found netplan files"
+    debug:
+      msg: "Found netplan files: {{ netplan_files.files | map(attribute='path') | list }}"
+    tags: [network-setup, info]
+
+  - name: "Network Setup | Read netplan configuration files"
+    slurp:
+      src: "{{ item.path }}"
+    register: netplan_contents
+    loop: "{{ netplan_files.files }}"
+    tags: [network-setup, read]
+    no_log: true
+
+  - name: "Network Setup | Find netplan file containing interface configuration"
+    set_fact:
+      target_netplan_file: "{{ item.item.path }}"
+      target_netplan_content: "{{ item.content | b64decode }}"
+    when: current_interface.stdout in (item.content | b64decode)
+    loop: "{{ netplan_contents.results }}"
+    tags: [network-setup, find]
+    no_log: true
+
+  - name: "Network Setup | Display target netplan file"
+    debug:
+      msg: "Target netplan file: {{ target_netplan_file | default('not found') }}"
+    tags: [network-setup, info]
+
+  - name: "Network Setup | Display netplan content for debugging"
+    debug:
+      msg: "Netplan content:\n{{ target_netplan_content }}"
+    when: target_netplan_file is defined
+    tags: [network-setup, debug]
+
+  - name: "Network Setup | Update set-name field to desired interface name"
+    replace:
+      path: "{{ target_netplan_file }}"
+      regexp: 'set-name:\s*"?[^"\n]*"?'
+      replace: 'set-name: "{{ vm_if_name }}"'
+    when: target_netplan_file is defined
+    tags: [network-setup, update]
+
+  - name: "Network Setup | Add set-name field if not present"
+    replace:
+      path: "{{ target_netplan_file }}"
+      regexp: '(\s+dhcp4:\s*true)'
+      replace: 'set-name: "{{ vm_if_name }}"\n      \1'
+    when: 
+      - target_netplan_file is defined
+      - "'set-name' not in target_netplan_content"
+    tags: [network-setup, update]
+
+  - name: "Network Setup | Apply netplan configuration"
+    command: "netplan apply"
+    tags: [network-setup, apply]
+
+  - name: "Network Setup | Wait for network to stabilize"
+    pause:
+      seconds: 5
+    tags: [network-setup, wait]
+
+  when: 
+    - ansible_distribution == "Ubuntu"
+    - rename_needed | default(false)
+
+# Connectivity test (always run if rename was needed)
+- name: "Network Setup | Test network connectivity"
+  command: "ping -c 3 -W 5 {{ connectivity_test_host | default('8.8.8.8') }}"
+  register: connectivity_test
+  when: rename_needed | default(false)
+  failed_when: false
+  changed_when: false
+  tags: [network-setup, connectivity]
+
+- name: "Network Setup | Display connectivity test result"
+  debug:
+    msg: "Network connectivity test: {{ 'PASSED' if connectivity_test.rc == 0 else 'FAILED' }}"
+  when: connectivity_test is defined and connectivity_test.rc is defined
+  tags: [network-setup, info]
+
+- name: "Network Setup | Verify final interface name"
+  shell: "ip route | grep default | awk '{print $5}' | head -1"
+  register: final_interface
+  when: rename_needed | default(false)
+  changed_when: false
+  tags: [network-setup, verify]
+
+- name: "Network Setup | Display final interface information"
+  debug:
+    msg: "Final interface name: {{ final_interface.stdout | default(current_interface.stdout) }}"
+  tags: [network-setup, info]
+
+- name: "Network Setup | Display summary report"
+  debug:
+    msg:
+      - "=== NETWORK SETUP SUMMARY REPORT ==="
+      - "Date: {{ ansible_date_time.iso8601 }}"
+      - "Host: {{ inventory_hostname }}"
+      - ""
+      - "Original Interface: {{ current_interface.stdout | default('unknown') }}"
+      - "Target Interface: {{ vm_if_name | default('not set') }}"
+      - "Final Interface: {{ final_interface.stdout | default(current_interface.stdout) }}"
+      - "Rename Performed: {{ rename_needed | default(false) }}"
+      - ""
+      - "{% if connectivity_test is defined and connectivity_test.rc is defined %}Connectivity Test: {{ 'PASSED' if connectivity_test.rc == 0 else 'FAILED' }}{% else %}Connectivity Test: Not performed{% endif %}"
+      - ""
+      - "{% if rename_needed | default(false) %}Status: Interface successfully renamed from {{ current_interface.stdout }} to {{ vm_if_name }}{% else %}Status: Interface {{ current_interface.stdout }} already had the correct name{% endif %}"
+      - "=== END OF NETWORK SETUP REPORT ==="
+  tags: [network-setup, report]

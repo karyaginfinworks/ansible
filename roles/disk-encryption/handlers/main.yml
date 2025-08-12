@@ -1,0 +1,8 @@
+---
+- name: update initramfs
+  command: update-initramfs -u
+  when: ansible_os_family == "Debian"
+
+- name: update initramfs redhat
+  command: dracut -f
+  when: ansible_os_family == "RedHat"

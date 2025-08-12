@@ -1,0 +1,16 @@
+---
+# Default values for disk-encryption role
+luks_cipher: aes-xts-plain64
+luks_key_size: 512
+luks_hash: sha256
+luks_iter_time: 2000
+
+# Encrypted device name
+encrypted_device_name: "encrypted_disk"
+
+# Mount point
+mount_point: "/mnt/encrypted"
+filesystem_type: "ext4"
+
+# Mount options
+mount_options: "defaults,noatime"

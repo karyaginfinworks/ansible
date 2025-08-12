@@ -1,0 +1,381 @@
+---
+- name: "CPU Optimization | Gather CPU information"
+  command: "lscpu"
+  register: cpu_info
+  changed_when: false
+  tags: [cpu-optimization, info]
+
+- name: "CPU Optimization | Display CPU information"
+  debug:
+    msg: "{{ cpu_info.stdout_lines }}"
+  tags: [cpu-optimization, info]
+
+- name: "CPU Optimization | Detect CPU vendor"
+  shell: "lscpu | grep '^Vendor ID:' | awk '{print $3}'"
+  register: cpu_vendor_raw
+  changed_when: false
+  tags: [cpu-optimization, detect]
+
+- name: "CPU Optimization | Set CPU vendor fact"
+  set_fact:
+    cpu_vendor: "{{ 'intel' if cpu_vendor_raw.stdout == 'GenuineIntel' else 'amd' if cpu_vendor_raw.stdout == 'AuthenticAMD' else 'unknown' }}"
+  tags: [cpu-optimization, detect]
+
+- name: "CPU Optimization | Display detected CPU vendor"
+  debug:
+    msg: "Detected CPU vendor: {{ cpu_vendor }} ({{ cpu_vendor_raw.stdout }})"
+  tags: [cpu-optimization, detect]
+
+- name: "CPU Optimization | Update package cache"
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  tags: [cpu-optimization, install]
+
+- name: "CPU Optimization | Install common packages"
+  package:
+    name: "{{ required_packages }}"
+    state: present
+  failed_when: false
+  tags: [cpu-optimization, install]
+
+- name: "CPU Optimization | Install Intel-specific packages"
+  package:
+    name: "{{ intel_packages }}"
+    state: present
+  when: cpu_vendor == "intel"
+  tags: [cpu-optimization, install, intel]
+
+- name: "CPU Optimization | Install AMD-specific packages"
+  package:
+    name: "{{ amd_packages }}"
+    state: present
+  when: cpu_vendor == "amd"
+  tags: [cpu-optimization, install, amd]
+
+- name: "CPU Optimization | Check if cpufreq is available"
+  stat:
+    path: "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+  register: cpufreq_available
+  tags: [cpu-optimization, check]
+
+- name: "CPU Optimization | Check current CPU governor"
+  shell: "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+  register: current_governor
+  failed_when: false
+  changed_when: false
+  when: cpufreq_available.stat.exists
+  tags: [cpu-optimization, check]
+
+- name: "CPU Optimization | Display current governor"
+  debug:
+    msg: "Current CPU governor: {{ current_governor.stdout | default('unknown') }}"
+  tags: [cpu-optimization, check]
+
+- name: "CPU Optimization | Check available governors"
+  shell: "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors"
+  register: available_governors
+  failed_when: false
+  changed_when: false
+  when: cpufreq_available.stat.exists
+  tags: [cpu-optimization, check]
+
+- name: "CPU Optimization | Display available governors"
+  debug:
+    msg: "Available governors: {{ available_governors.stdout | default('unknown') }}"
+  tags: [cpu-optimization, check]
+
+- name: "CPU Optimization | Select best available governor"
+  set_fact:
+    selected_governor: >-
+      {%- if available_governors.stdout is defined and available_governors.stdout != '' -%}
+        {%- if cpu_governor in available_governors.stdout -%}
+          {{ cpu_governor }}
+        {%- elif cpu_governor_fallback in available_governors.stdout -%}
+          {{ cpu_governor_fallback }}
+        {%- else -%}
+          {{ available_governors.stdout.split()[0] }}
+        {%- endif -%}
+      {%- else -%}
+        {{ cpu_governor_fallback }}
+      {%- endif -%}
+  tags: [cpu-optimization, check]
+
+- name: "CPU Optimization | Display selected governor"
+  debug:
+    msg: "Selected governor: {{ selected_governor }} (requested: {{ cpu_governor }}, available: {{ available_governors.stdout | default('unknown') }})"
+  tags: [cpu-optimization, check]
+
+- name: "CPU Optimization | Set CPU governor to selected mode"
+  copy:
+    content: "{{ selected_governor }}"
+    dest: "/sys/devices/system/cpu/cpu{{ item }}/cpufreq/scaling_governor"
+  with_sequence: start=0 end={{ ansible_processor_vcpus - 1 }}
+  when: 
+    - cpufreq_available.stat.exists
+    - selected_governor is defined
+    - current_governor is defined
+    - current_governor.stdout is defined
+    - current_governor.stdout != selected_governor
+  failed_when: false
+  tags: [cpu-optimization, governor]
+  # This task sets the CPU governor to the best available governor
+
+# Intel specific tasks
+- name: "CPU Optimization | Check Intel P-State driver"
+  stat:
+    path: "{{ intel_pstate_path }}"
+  register: intel_pstate
+  when: cpu_vendor == "intel"
+  tags: [cpu-optimization, intel, check]
+
+- name: "CPU Optimization | Configure Intel Turbo Boost"
+  copy:
+    content: "{{ '0' if enable_turbo_boost else '1' }}"
+    dest: "{{ intel_turbo_path }}"
+  when: 
+    - cpu_vendor == "intel"
+    - intel_pstate.stat.exists
+  tags: [cpu-optimization, intel, turbo]
+
+- name: "CPU Optimization | Set Intel P-State max performance"
+  copy:
+    content: "100"
+    dest: "{{ intel_max_perf_path }}"
+  when: 
+    - cpu_vendor == "intel"
+    - intel_pstate.stat.exists
+  tags: [cpu-optimization, intel, performance]
+
+- name: "CPU Optimization | Set Intel P-State min performance"
+  copy:
+    content: "0"
+    dest: "{{ intel_min_perf_path }}"
+  when: 
+    - cpu_vendor == "intel"
+    - intel_pstate.stat.exists
+  tags: [cpu-optimization, intel, performance]
+
+- name: "CPU Optimization | Check Intel Turbo status"
+  shell: "cat {{ intel_turbo_path }}"
+  register: intel_turbo_status
+  when: 
+    - cpu_vendor == "intel"
+    - intel_pstate.stat.exists
+  changed_when: false
+  tags: [cpu-optimization, intel, verify]
+
+# AMD specific tasks
+- name: "CPU Optimization | Check AMD boost support"
+  stat:
+    path: "{{ amd_boost_path }}"
+  register: amd_boost
+  when: cpu_vendor == "amd"
+  tags: [cpu-optimization, amd, check]
+
+- name: "CPU Optimization | Configure AMD Boost"
+  copy:
+    content: "{{ '1' if enable_turbo_boost else '0' }}"
+    dest: "{{ amd_boost_path }}"
+  when: 
+    - cpu_vendor == "amd"
+    - amd_boost.stat.exists
+  tags: [cpu-optimization, amd, boost]
+
+- name: "CPU Optimization | Check AMD P-State driver"
+  stat:
+    path: "{{ amd_pstate_path }}"
+  register: amd_pstate
+  when: cpu_vendor == "amd"
+  tags: [cpu-optimization, amd, check]
+
+- name: "CPU Optimization | Configure AMD P-State"
+  copy:
+    content: "performance"
+    dest: "{{ amd_pstate_path }}/status"
+  when: 
+    - cpu_vendor == "amd"
+    - amd_pstate.stat.exists
+  failed_when: false
+  tags: [cpu-optimization, amd, pstate]
+
+- name: "CPU Optimization | Disable energy aware scheduling for AMD"
+  sysctl:
+    name: kernel.sched_energy_aware
+    value: "0"
+    state: present
+    reload: yes
+  when: cpu_vendor == "amd"
+  tags: [cpu-optimization, amd, scheduler]
+
+- name: "CPU Optimization | Check AMD boost status"
+  shell: "cat {{ amd_boost_path }}"
+  register: amd_boost_status
+  when: 
+    - cpu_vendor == "amd"
+    - amd_boost.stat.exists
+  changed_when: false
+  tags: [cpu-optimization, amd, verify]
+
+# Common tasks
+- name: "CPU Optimization | Check current CPU frequencies"
+  shell: "cat /proc/cpuinfo | grep 'cpu MHz' | head -4 | sed 's/\t/ /g'"
+  register: cpu_frequencies
+  changed_when: false
+  tags: [cpu-optimization, freq]
+
+- name: "CPU Optimization | Display CPU frequencies"
+  debug:
+    msg: "{{ cpu_frequencies.stdout_lines }}"
+  tags: [cpu-optimization, freq]
+
+- name: "CPU Optimization | Set minimum frequency"
+  copy:
+    content: "{{ cpu_min_freq }}"
+    dest: "/sys/devices/system/cpu/cpu{{ item }}/cpufreq/scaling_min_freq"
+  with_sequence: start=0 end={{ ansible_processor_vcpus - 1 }}
+  when: 
+    - cpufreq_available.stat.exists
+    - cpu_min_freq != "auto"
+  failed_when: false
+  tags: [cpu-optimization, freq]
+
+- name: "CPU Optimization | Set maximum frequency"
+  copy:
+    content: "{{ cpu_max_freq }}"
+    dest: "/sys/devices/system/cpu/cpu{{ item }}/cpufreq/scaling_max_freq"
+  with_sequence: start=0 end={{ ansible_processor_vcpus - 1 }}
+  when: 
+    - cpufreq_available.stat.exists
+    - cpu_max_freq != "auto"
+  failed_when: false
+  tags: [cpu-optimization, freq]
+
+- name: "CPU Optimization | Configure NUMA balancing"
+  sysctl:
+    name: kernel.numa_balancing
+    value: "{{ '1' if enable_numa_balancing else '0' }}"
+    state: present
+    reload: yes
+  tags: [cpu-optimization, numa]
+
+- name: "CPU Optimization | Find available block devices"
+  find:
+    paths: "/sys/block"
+    file_type: directory
+    patterns: "*"
+  register: block_devices
+  tags: [cpu-optimization, scheduler]
+
+- name: "CPU Optimization | Configure scheduler policy"
+  copy:
+    content: "{{ scheduler_policy }}"
+    dest: "/sys/block/{{ item.path | basename }}/queue/scheduler"
+  with_items: "{{ block_devices.files }}"
+  when: 
+    - item.path | basename not in ['loop0', 'loop1', 'loop2', 'loop3', 'loop4', 'loop5', 'loop6', 'loop7']
+    - item.path | basename not in ['ram0', 'ram1', 'ram2', 'ram3', 'ram4', 'ram5', 'ram6', 'ram7']
+  failed_when: false
+  tags: [cpu-optimization, scheduler]
+
+- name: "CPU Optimization | Create Intel CPU optimization script"
+  template:
+    src: cpufreq.j2
+    dest: /usr/local/bin/cpu-optimize-intel.sh
+    mode: '0755'
+  when: cpu_vendor == "intel"
+  tags: [cpu-optimization, intel, script]
+
+- name: "CPU Optimization | Create AMD CPU optimization script"
+  template:
+    src: amd-cpufreq.j2
+    dest: /usr/local/bin/cpu-optimize-amd.sh
+    mode: '0755'
+  when: cpu_vendor == "amd"
+  tags: [cpu-optimization, amd, script]
+
+- name: "CPU Optimization | Create generic CPU optimization script"
+  file:
+    src: "/usr/local/bin/cpu-optimize-{{ cpu_vendor }}.sh"
+    dest: "/usr/local/bin/cpu-optimize.sh"
+    state: link
+  when: cpu_vendor in ['intel', 'amd']
+  tags: [cpu-optimization, script]
+
+- name: "CPU Optimization | Verify final CPU governor"
+  shell: "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+  register: final_governor
+  changed_when: false
+  failed_when: false
+  when: cpufreq_available.stat.exists
+  tags: [cpu-optimization, verify]
+
+# GRUB Configuration for CPU optimization
+- name: "CPU Optimization | Read current GRUB configuration"
+  slurp:
+    src: "{{ grub_config_path }}"
+  register: grub_config_content
+  tags: [cpu-optimization, grub]
+
+- name: "CPU Optimization | Extract GRUB_CMDLINE_LINUX matches"
+  set_fact:
+    grub_cmdline_matches: "{{ grub_config_content.content | b64decode | regex_search('GRUB_CMDLINE_LINUX=\"([^\"]+)\"', '\\1') }}"
+  tags: [cpu-optimization, grub]
+
+- name: "CPU Optimization | Parse current GRUB_CMDLINE_LINUX"
+  set_fact:
+    current_grub_cmdline: "{{ grub_cmdline_matches[0] if grub_cmdline_matches else '' }}"
+  tags: [cpu-optimization, grub]
+
+- name: "CPU Optimization | Build new GRUB_CMDLINE_LINUX with performance parameters"
+  set_fact:
+    new_grub_cmdline: "{{ current_grub_cmdline }} {{ grub_cmdline_params | join(' ') }}"
+  when: disable_c_states or cpu_governor == "performance"
+  tags: [cpu-optimization, grub]
+
+- name: "CPU Optimization | Update GRUB configuration with performance settings"
+  lineinfile:
+    path: "{{ grub_config_path }}"
+    regexp: '^GRUB_CMDLINE_LINUX='
+    line: 'GRUB_CMDLINE_LINUX="{{ new_grub_cmdline | trim }}"'
+    backup: yes
+  when: 
+    - new_grub_cmdline is defined
+    - disable_c_states or cpu_governor == "performance"
+  notify: update grub
+  tags: [cpu-optimization, grub]
+
+- name: "CPU Optimization | Ensure cpufreq performance governor is set explicitly"
+  copy:
+    content: "performance"
+    dest: "/sys/devices/system/cpu/cpu{{ item }}/cpufreq/scaling_governor"
+  with_sequence: start=0 end={{ ansible_processor_vcpus - 1 }}
+  when: 
+    - cpufreq_available.stat.exists
+    - cpu_governor == "performance"
+  failed_when: false
+  tags: [cpu-optimization, performance]
+
+- name: "CPU Optimization | Configure processor.max_cstate for performance"
+  sysctl:
+    name: kernel.processor_max_cstate
+    value: "1"
+    state: present
+    reload: yes
+  when: disable_c_states
+  tags: [cpu-optimization, performance, cstate]
+
+- name: "CPU Optimization | Display optimization results"
+  debug:
+    msg: 
+      - "CPU Vendor: {{ cpu_vendor }}"
+      - "CPU Governor: {{ final_governor.stdout | default('N/A - cpufreq not available') }}"
+      - "CPUfreq Available: {{ 'Yes' if cpufreq_available.stat.exists else 'No (VM/Container)' }}"
+      - "Performance Mode: {{ 'Enabled' if cpu_governor == 'performance' else 'Disabled' }}"
+      - "Turbo/Boost: {{ 'Enabled' if enable_turbo_boost else 'Disabled' }}"
+      - "NUMA Balancing: {{ 'Enabled' if enable_numa_balancing else 'Disabled' }}"
+      - "C-States Disabled: {{ 'Yes' if disable_c_states else 'No' }}"
+      - "Intel Turbo Status: {{ intel_turbo_status.stdout | default('N/A') }}"
+      - "AMD Boost Status: {{ amd_boost_status.stdout | default('N/A') }}"
+      - "GRUB Performance Params: {{ 'Applied' if new_grub_cmdline is defined else 'Not Applied' }}"
+  tags: [cpu-optimization, verify]

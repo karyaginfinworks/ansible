@@ -1,0 +1,5 @@
+---
+# Defaults for network-setup role
+
+# Connectivity test settings
+connectivity_test_host: "8.8.8.8"

@@ -1,0 +1,155 @@
+---
+- name: "Disk Encryption | Check if device exists"
+  stat:
+    path: "{{ disk_to_encrypt }}"
+  register: device_stat
+  failed_when: not device_stat.stat.exists
+  tags: [disk-encryption, preflight]
+
+- name: "Disk Encryption | Install required packages"
+  package:
+    name: "{{ required_packages }}"
+    state: present
+  tags: [disk-encryption, install]
+
+- name: "Disk Encryption | Check if device is already encrypted"
+  command: "cryptsetup isLuks {{ disk_to_encrypt }}"
+  register: luks_check
+  failed_when: false
+  changed_when: false
+  tags: [disk-encryption, check]
+
+- name: "Disk Encryption | Check what processes are using the device"
+  shell: "lsof {{ disk_to_encrypt }} || fuser -v {{ disk_to_encrypt }} || true"
+  register: device_usage
+  changed_when: false
+  when: luks_check.rc != 0
+  tags: [disk-encryption, check]
+
+- name: "Disk Encryption | Find mount points for device"
+  shell: "mount | grep {{ disk_to_encrypt }} | awk '{print $3}' || true"
+  register: mount_points
+  changed_when: false
+  when: luks_check.rc != 0
+  tags: [disk-encryption, check]
+
+- name: "Disk Encryption | Unmount all mount points for device"
+  mount:
+    path: "{{ item }}"
+    state: unmounted
+  loop: "{{ mount_points.stdout_lines }}"
+  when: 
+    - luks_check.rc != 0
+    - mount_points.stdout_lines is defined
+    - mount_points.stdout_lines | length > 0
+  failed_when: false
+  tags: [disk-encryption, unmount]
+
+- name: "Disk Encryption | Force unmount if still mounted"
+  shell: "umount -f {{ disk_to_encrypt }} || true"
+  when: luks_check.rc != 0
+  tags: [disk-encryption, unmount]
+
+- name: "Disk Encryption | Kill processes using the device"
+  shell: "fuser -k {{ disk_to_encrypt }} || true"
+  when: luks_check.rc != 0
+  tags: [disk-encryption, unmount]
+
+- name: "Disk Encryption | Wait for device to be free"
+  pause:
+    seconds: 2
+  when: luks_check.rc != 0
+  tags: [disk-encryption, unmount]
+
+- name: "Disk Encryption | Create LUKS encryption"
+  command: >
+    cryptsetup luksFormat
+    --cipher {{ luks_cipher }}
+    --key-size {{ luks_key_size }}
+    --hash {{ luks_hash }}
+    --iter-time {{ luks_iter_time }}
+    --batch-mode
+    {{ disk_to_encrypt }}
+  args:
+    stdin: "{{ encryption_passphrase }}"
+  when: luks_check.rc != 0
+  tags: [disk-encryption, format]
+
+- name: "Disk Encryption | Open LUKS device (new encryption)"
+  command: "cryptsetup luksOpen {{ disk_to_encrypt }} {{ encrypted_device_name }}"
+  args:
+    stdin: "{{ encryption_passphrase }}"
+  when: luks_check.rc != 0
+  tags: [disk-encryption, open]
+
+- name: "Disk Encryption | Check if LUKS device is already open"
+  stat:
+    path: "/dev/mapper/{{ encrypted_device_name }}"
+  register: luks_device_open
+  when: luks_check.rc == 0
+  tags: [disk-encryption, check]
+
+- name: "Disk Encryption | Open existing LUKS device"
+  command: "cryptsetup luksOpen {{ disk_to_encrypt }} {{ encrypted_device_name }}"
+  args:
+    stdin: "{{ encryption_passphrase }}"
+  when: 
+    - luks_check.rc == 0
+    - not luks_device_open.stat.exists
+  failed_when: false
+  tags: [disk-encryption, open]
+
+- name: "Disk Encryption | Create filesystem"
+  filesystem:
+    fstype: "{{ filesystem_type }}"
+    dev: "/dev/mapper/{{ encrypted_device_name }}"
+  when: luks_check.rc != 0
+  tags: [disk-encryption, filesystem]
+
+- name: "Disk Encryption | Create mount point"
+  file:
+    path: "{{ mount_point }}"
+    state: directory
+    mode: '0755'
+  tags: [disk-encryption, mount]
+
+- name: "Disk Encryption | Add to crypttab"
+  template:
+    src: crypttab.j2
+    dest: /etc/crypttab
+    backup: yes
+  notify: update initramfs
+  tags: [disk-encryption, crypttab]
+
+- name: "Disk Encryption | Verify mapper device exists before mounting"
+  stat:
+    path: "/dev/mapper/{{ encrypted_device_name }}"
+  register: mapper_device_check
+  tags: [disk-encryption, check]
+
+- name: "Disk Encryption | Add to fstab"
+  mount:
+    path: "{{ mount_point }}"
+    src: "/dev/mapper/{{ encrypted_device_name }}"
+    fstype: "{{ filesystem_type }}"
+    opts: "{{ mount_options }}"
+    state: mounted
+  when: mapper_device_check.stat.exists
+  tags: [disk-encryption, fstab]
+
+- name: "Disk Encryption | Display error if mapper device not found"
+  debug:
+    msg: "ERROR: /dev/mapper/{{ encrypted_device_name }} does not exist. LUKS device may not be properly opened."
+  when: not mapper_device_check.stat.exists
+  tags: [disk-encryption, error]
+
+- name: "Disk Encryption | Verify encryption status"
+  command: "cryptsetup status {{ encrypted_device_name }}"
+  register: encryption_status
+  changed_when: false
+  tags: [disk-encryption, verify]
+
+- name: "Disk Encryption | Display encryption info"
+  debug:
+    msg: "{{ encryption_status.stdout_lines }}"
+  tags: [disk-encryption, info]

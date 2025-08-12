@@ -1,0 +1,11 @@
+---
+# Variables for network-setup role
+
+# Required packages for network operations
+required_packages:
+  - net-tools
+  - iproute2
+
+# Ubuntu specific packages
+ubuntu_packages:
+  - netplan.io

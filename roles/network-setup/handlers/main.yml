@@ -1,0 +1,59 @@
+---
+# Network Setup Role - Handlers
+
+- name: reload udev rules
+  command: udevadm control --reload-rules
+  notify: trigger udev
+
+- name: trigger udev
+  command: udevadm trigger --subsystem-match=net
+
+- name: apply netplan
+  command: netplan apply
+  when: ansible_distribution == "Ubuntu"
+
+- name: restart networkmanager
+  systemd:
+    name: NetworkManager
+    state: restarted
+  when: ansible_os_family == "RedHat"
+
+- name: restart systemd-networkd
+  systemd:
+    name: systemd-networkd
+    state: restarted
+  when: ansible_distribution == "Ubuntu"
+
+- name: restart systemd-resolved
+  systemd:
+    name: systemd-resolved
+    state: restarted
+  when: ansible_distribution == "Ubuntu"
+
+- name: restart network
+  systemd:
+    name: network
+    state: restarted
+  when: 
+    - ansible_os_family == "RedHat"
+    - ansible_distribution_major_version | int < 8
+
+- name: reload udev and restart networking
+  command: udevadm control --reload-rules
+  notify:
+    - trigger udev for interface rename
+    - wait for interface rename
+    - restart systemd-networkd after rename
+
+- name: trigger udev for interface rename
+  command: udevadm trigger --subsystem-match=net
+
+- name: wait for interface rename
+  wait_for:
+    timeout: 10
+
+- name: restart systemd-networkd after rename
+  systemd:
+    name: systemd-networkd
+    state: restarted
+  when: ansible_distribution == "Ubuntu"

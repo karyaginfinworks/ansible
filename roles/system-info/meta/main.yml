@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  author: 
+  description: System information gathering and reporting role
+  company: 
+  license: MIT
+  min_ansible_version: "2.12"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - "bionic"
+        - "focal"
+        - "jammy"
+dependencies: []

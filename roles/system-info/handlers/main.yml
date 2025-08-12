@@ -1,0 +1,18 @@
+---
+# System Info Role - Handlers
+
+- name: refresh system facts
+  setup:
+    gather_subset:
+      - all
+
+- name: update package cache
+  package:
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: clean package cache
+  package:
+    autoremove: yes
+    autoclean: yes
+  when: ansible_os_family == "Debian"
